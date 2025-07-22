@@ -15,11 +15,6 @@ public class PaymentHandler {
     private final PaymentService paymentService;
     private static final String POST = "POST";
     private static final String GET = "GET";
-    private static final String STATUS_KEY = "status";
-    private static final String MESSAGE_KEY = "message";
-    private static final String CORRELATION_ID_KEY = "correlationId";
-    private static final String SUCCESS_VALUE = "success";
-    private static final String PAYMENT_ACCEPTED_MSG = "Payment request accepted";
     private static final byte[] AMOUNT_ERROR = "Amount must be greater than zero".getBytes();
     private static final byte[] PROCESS_ERROR = "Failed to process payment".getBytes();
 
@@ -42,18 +37,12 @@ public class PaymentHandler {
                 return;
             }
 
+            // Processar de forma assíncrona e retornar imediatamente
             CompletableFuture<Boolean> future = paymentService.processPayment(payment);
 
-            future.whenComplete((success, _) -> {
-                try {
-                    if (success != null && success) {
-                        sendPaymentAcceptedResponse(exchange, payment);
-                    } else {
-                        HttpResponseHelper.sendErrorResponse(exchange, 503, PROCESS_ERROR);
-                    }
-                } catch (IOException ignore) {
-                }
-            });
+            // Responder imediatamente com 202 Accepted
+            sendPaymentAcceptedResponse(exchange, payment);
+
         } catch (IllegalArgumentException e) {
             HttpResponseHelper.sendInvalidRequest(exchange);
         } catch (Exception e) {
@@ -104,12 +93,7 @@ public class PaymentHandler {
 
     private void sendPaymentAcceptedResponse(HttpExchange exchange, Payment payment) throws IOException {
         String correlationId = payment.correlationId();
-        byte[] response = JsonUtils.createSimpleJsonResponse(
-                STATUS_KEY, SUCCESS_VALUE,
-                MESSAGE_KEY, PAYMENT_ACCEPTED_MSG,
-                CORRELATION_ID_KEY, correlationId
-        );
-
+        byte[] response = JsonUtils.createPaymentAcceptedResponse(correlationId);
         HttpResponseHelper.sendJsonResponse(exchange, 202, response);
     }
 }

@@ -7,22 +7,26 @@ import com.gasparbarancelli.repository.PaymentRepository;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class PaymentRepositoryInMemory implements PaymentRepository {
-    private final BlockingQueue<Payment> paymentsQueue;
+    private static final int QUEUE_CAPACITY = 100_000;
+    private final Payment[] paymentRing;
+    private final AtomicInteger head = new AtomicInteger(0);
+    private final AtomicInteger tail = new AtomicInteger(0);
+    private final Semaphore availableSlots;
+    private final Semaphore availableItems;
+
     private final ConcurrentHashMap<String, PaymentData> paymentsMap;
     private final AtomicBoolean healthCheckLock = new AtomicBoolean(false);
     private final AtomicReference<ProcessorService> healthyProcessor = new AtomicReference<>(ProcessorService.DEFAULT);
     private final ProcessorMetrics defaultMetrics = new ProcessorMetrics();
     private final ProcessorMetrics fallbackMetrics = new ProcessorMetrics();
-
-    private static final int QUEUE_CAPACITY = 100_000;
 
     private static class PaymentData {
         final String correlationId;
@@ -62,22 +66,42 @@ public class PaymentRepositoryInMemory implements PaymentRepository {
     }
 
     public PaymentRepositoryInMemory() {
-        this.paymentsQueue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
+        this.paymentRing = new Payment[QUEUE_CAPACITY];
+        this.availableSlots = new Semaphore(QUEUE_CAPACITY);
+        this.availableItems = new Semaphore(0);
         this.paymentsMap = new ConcurrentHashMap<>(10_000, 0.75f, 16);
     }
 
     public void enqueuePayment(Payment request) {
-        if (!paymentsQueue.offer(request)) {
-            throw new IllegalStateException("Payment queue is full");
+        try {
+            if (!availableSlots.tryAcquire()) {
+                throw new IllegalStateException("Payment queue is full");
+            }
+            int index = tail.getAndIncrement() % QUEUE_CAPACITY;
+            paymentRing[index] = request;
+            availableItems.release();
+        } catch (Exception e) {
+            availableSlots.release();
+            throw new IllegalStateException("Failed to enqueue payment", e);
         }
     }
 
     public Payment dequeuePayment(int workerId) {
-        return paymentsQueue.poll();
+        try {
+            availableItems.acquire(); // Bloqueia até ter item disponível
+            int index = head.getAndIncrement() % QUEUE_CAPACITY;
+            Payment payment = paymentRing[index];
+            paymentRing[index] = null; // Help GC
+            availableSlots.release();
+            return payment;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
     }
 
     public void requeuePayment(Payment request) {
-        paymentsQueue.offer(request);
+        enqueuePayment(request);
     }
 
     public void savePayment(Payment request, ProcessorService service) {
@@ -160,10 +184,21 @@ public class PaymentRepositoryInMemory implements PaymentRepository {
     }
 
     public void purgeAllData() {
-        paymentsQueue.clear();
+        // Limpar ring buffer
+        for (int i = 0; i < QUEUE_CAPACITY; i++) {
+            paymentRing[i] = null;
+        }
+        head.set(0);
+        tail.set(0);
+
+        // Resetar semáforos
+        availableItems.drainPermits();
+        availableSlots.drainPermits();
+        availableSlots.release(QUEUE_CAPACITY);
+
+        // Limpar mapas e métricas
         paymentsMap.clear();
         defaultMetrics.reset();
         fallbackMetrics.reset();
     }
-
 }

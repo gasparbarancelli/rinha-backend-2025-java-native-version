@@ -7,27 +7,28 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.Optional;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 public class Main {
-
     private static final String HTTP_PORT_ENV = "HTTP_PORT";
-    private static final int BACKLOG = 1024;
-    private static final int CORE_POOL_SIZE = 15;
-    private static final int MAX_POOL_SIZE = 150;
-    private static final long KEEP_ALIVE_TIME = 10L;
-    private static final int QUEUE_CAPACITY = 1000;
+    private static final int BACKLOG = 4096; // Aumentado para suportar mais conexões
 
     static {
-        System.setProperty("sun.net.httpserver.maxReqTime", "1000");
-        System.setProperty("sun.net.httpserver.maxRspTime", "1000");
+        // Otimizações para baixa latência
+        System.setProperty("sun.net.httpserver.maxReqTime", "100"); // Reduzido de 1000
+        System.setProperty("sun.net.httpserver.maxRspTime", "100"); // Reduzido de 1000
         System.setProperty("sun.net.httpserver.nodelay", "true");
-        System.setProperty("sun.net.httpserver.maxConnections", "1000");
-
+        System.setProperty("sun.net.httpserver.maxConnections", "2000");
         System.setProperty("java.net.preferIPv4Stack", "true");
         System.setProperty("java.awt.headless", "true");
+        System.setProperty("jdk.httpclient.connectionPoolSize", "100");
+        System.setProperty("jdk.httpclient.keepalive.timeout", "10");
+
+        // Otimizações de JVM
+        System.setProperty("jdk.virtualThreadScheduler.parallelism", "64");
+        System.setProperty("jdk.virtualThreadScheduler.maxPoolSize", "256");
     }
 
     public static void main(String[] args) throws IOException {
@@ -40,7 +41,6 @@ public class Main {
         }
 
         var server = HttpServer.create(inetSocketAddress.get(), BACKLOG);
-
         var paymentService = new PaymentService();
         var paymentHandler = new PaymentHandler(paymentService);
 
@@ -48,22 +48,11 @@ public class Main {
         server.createContext("/payments-summary", paymentHandler::handlePaymentsSummary);
         server.createContext("/purge-payments", paymentHandler::handlePurgePayments);
 
-        var executor = new ThreadPoolExecutor(
-                CORE_POOL_SIZE,
-                MAX_POOL_SIZE,
-                KEEP_ALIVE_TIME,
-                TimeUnit.SECONDS,
-                new ArrayBlockingQueue<>(QUEUE_CAPACITY),
-                Thread.ofVirtual().factory(),
-                new ThreadPoolExecutor.CallerRunsPolicy()
-        );
-
-        executor.prestartAllCoreThreads();
-        executor.allowCoreThreadTimeOut(true);
-
+        // Usar ThreadPerTaskExecutor com virtual threads para máxima performance
+        var executor = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory());
         server.setExecutor(executor);
 
-        System.out.println("Rinha Backend 2025 - Otimizado para K6 (2 instâncias)");
+        System.out.println("Rinha Backend 2025 - Otimizado para p99 < 1ms");
         System.out.println("Porta: " + inetSocketAddress.get().getPort());
 
         server.start();
@@ -71,7 +60,6 @@ public class Main {
         long endTime = System.nanoTime();
         long startupTimeNanos = endTime - startTime;
         double startupTimeMillis = startupTimeNanos / 1_000_000.0;
-
         System.out.printf("Aplicação iniciada em %.3f ms (%.0f nanosegundos)%n",
                 startupTimeMillis, (double) startupTimeNanos);
     }
@@ -81,7 +69,6 @@ public class Main {
         if (port == null || port.isEmpty()) {
             return Optional.empty();
         }
-
         try {
             return Optional.of(new InetSocketAddress(Integer.parseInt(port)));
         } catch (NumberFormatException e) {

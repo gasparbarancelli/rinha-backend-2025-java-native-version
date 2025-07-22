@@ -19,9 +19,11 @@ import com.gasparbarancelli.transport.model.ServiceHealthResponse;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 
 public class JsonUtils {
 
@@ -31,8 +33,14 @@ public class JsonUtils {
     private static final ObjectReader PAYMENT_REQUEST_READER;
     private static final ObjectReader SERVICE_HEALTH_READER;
     private static final ObjectWriter DEFAULT_WRITER;
-    private static final ThreadLocal<ByteArrayOutputStream> BYTE_STREAM_CACHE =
-            ThreadLocal.withInitial(() -> new ByteArrayOutputStream(512));
+    private static final ThreadLocal<byte[]> BUFFER_CACHE =
+            ThreadLocal.withInitial(() -> new byte[2048]);
+    private static final String PAYMENT_RESPONSE_TEMPLATE =
+            "{\"status\":\"success\",\"message\":\"Payment request accepted\",\"correlationId\":\"%s\"}";
+    private static final byte[] PAYMENT_RESPONSE_PREFIX =
+            "{\"status\":\"success\",\"message\":\"Payment request accepted\",\"correlationId\":\"".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] PAYMENT_RESPONSE_SUFFIX =
+            "\"}".getBytes(StandardCharsets.UTF_8);
 
     static {
         JSON_FACTORY = new JsonFactory();
@@ -40,7 +48,6 @@ public class JsonUtils {
 
         OBJECT_MAPPER.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         OBJECT_MAPPER.configure(JsonParser.Feature.ALLOW_UNQUOTED_FIELD_NAMES, false);
-        //OBJECT_MAPPER.configure(JsonGenerator.Feature.QUOTE_FIELD_NAMES, true);
         OBJECT_MAPPER.setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY);
         OBJECT_MAPPER.setVisibility(PropertyAccessor.GETTER, JsonAutoDetect.Visibility.NONE);
         OBJECT_MAPPER.setVisibility(PropertyAccessor.IS_GETTER, JsonAutoDetect.Visibility.NONE);
@@ -105,23 +112,23 @@ public class JsonUtils {
         }
     }
 
-    public static byte[] createSimpleJsonResponse(String... keyValues) {
-        ByteArrayOutputStream baos = BYTE_STREAM_CACHE.get();
-        baos.reset();
+    public static byte[] createPaymentAcceptedResponse(String correlationId) {
+        byte[] correlationBytes = correlationId.getBytes(StandardCharsets.UTF_8);
+        int totalSize = PAYMENT_RESPONSE_PREFIX.length + correlationBytes.length + PAYMENT_RESPONSE_SUFFIX.length;
 
-        try (JsonGenerator gen = JSON_FACTORY.createGenerator(baos)) {
-            gen.writeStartObject();
-
-            for (int i = 0; i < keyValues.length; i += 2) {
-                gen.writeStringField(keyValues[i], keyValues[i + 1]);
-            }
-
-            gen.writeEndObject();
-            gen.flush();
-
-            return baos.toByteArray();
-        } catch (IOException e) {
-            throw new RuntimeException("Error creating JSON response", e);
+        byte[] buffer = BUFFER_CACHE.get();
+        if (totalSize <= buffer.length) {
+            int pos = 0;
+            System.arraycopy(PAYMENT_RESPONSE_PREFIX, 0, buffer, pos, PAYMENT_RESPONSE_PREFIX.length);
+            pos += PAYMENT_RESPONSE_PREFIX.length;
+            System.arraycopy(correlationBytes, 0, buffer, pos, correlationBytes.length);
+            pos += correlationBytes.length;
+            System.arraycopy(PAYMENT_RESPONSE_SUFFIX, 0, buffer, pos, PAYMENT_RESPONSE_SUFFIX.length);
+            return Arrays.copyOf(buffer, totalSize);
+        } else {
+            // Fallback para strings grandes
+            return String.format(PAYMENT_RESPONSE_TEMPLATE, correlationId).getBytes(StandardCharsets.UTF_8);
         }
     }
+
 }

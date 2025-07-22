@@ -15,6 +15,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class PaymentService {
@@ -27,12 +28,21 @@ public class PaymentService {
     private final URI fallbackPaymentUri;
     private final URI defaultHealthUri;
     private final URI fallbackHealthUri;
-    private static final int WORKER_COUNT = 10;
-    private static final Duration CONNECT_TIMEOUT = Duration.ofMillis(500);
-    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
-    private static final Duration HEALTH_CHECK_TIMEOUT = Duration.ofSeconds(2);
+
+    // Cache de health status
+    private volatile long lastHealthCheck = 0;
+    private static final long HEALTH_CACHE_MS = 5000;
+
+    private static final int WORKER_COUNT = 20; // Aumentado para melhor throughput
+    private static final Duration CONNECT_TIMEOUT = Duration.ofMillis(100); // Reduzido de 500ms
+    private static final Duration REQUEST_TIMEOUT = Duration.ofMillis(500); // Reduzido de 5s
+    private static final Duration HEALTH_CHECK_TIMEOUT = Duration.ofMillis(200); // Reduzido de 2s
     private static final String CONTENT_TYPE_HEADER = "Content-Type";
     private static final String APPLICATION_JSON = "application/json";
+
+    // Métricas para debug
+    private final AtomicLong totalProcessed = new AtomicLong(0);
+    private final AtomicLong totalQueueTime = new AtomicLong(0);
 
     private record ProcessorState(ProcessorService service, URI uri) {
     }
@@ -59,7 +69,7 @@ public class PaymentService {
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(CONNECT_TIMEOUT)
                 .version(HttpClient.Version.HTTP_1_1)
-                .executor(Executors.newVirtualThreadPerTaskExecutor())
+                .executor(ForkJoinPool.commonPool()) // Usar ForkJoinPool para melhor performance
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
 
@@ -85,33 +95,27 @@ public class PaymentService {
     private void processPaymentsLoop(int workerId) {
         while (!Thread.currentThread().isInterrupted()) {
             try {
-                Payment request = repository.dequeuePayment(workerId);
+                long startTime = System.nanoTime();
+                Payment request = repository.dequeuePayment(workerId); // Agora bloqueia até ter payment
 
-                if (request == null) {
-                    Thread.sleep(100);
-                    continue;
+                if (request != null) {
+                    long queueTime = System.nanoTime() - startTime;
+                    totalQueueTime.addAndGet(queueTime);
+
+                    if (!processPaymentToProcessor(request)) {
+                        repository.requeuePayment(request);
+                    } else {
+                        totalProcessed.incrementAndGet();
+                    }
                 }
-
-                if (!processPaymentToProcessor(request)) {
-                    repository.requeuePayment(request);
-                }
-
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
             } catch (Exception e) {
-                try {
-                    Thread.sleep(100);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
+                // Log error but continue
             }
         }
     }
 
     private boolean processPaymentToProcessor(Payment request) {
-        ProcessorState currentProcessor = healthyProcessor.get();
+        ProcessorState currentProcessor = getCachedHealthyProcessor();
 
         try {
             String requestBody = JsonUtils.toJson(request);
@@ -138,6 +142,16 @@ public class PaymentService {
         }
     }
 
+    private ProcessorState getCachedHealthyProcessor() {
+        long now = System.currentTimeMillis();
+        if (now - lastHealthCheck < HEALTH_CACHE_MS) {
+            return healthyProcessor.get();
+        }
+        // Forçar atualização assíncrona se cache expirou
+        scheduler.execute(this::performHealthCheck);
+        return healthyProcessor.get();
+    }
+
     private void startHealthChecks() {
         scheduler.scheduleWithFixedDelay(this::performHealthCheck, 0, 6, TimeUnit.SECONDS);
     }
@@ -147,6 +161,7 @@ public class PaymentService {
             if (repository.acquireHealthCheckLock()) {
                 try {
                     updateHealthyProcessor();
+                    lastHealthCheck = System.currentTimeMillis();
                 } finally {
                     repository.releaseHealthCheckLock();
                 }
@@ -164,8 +179,8 @@ public class PaymentService {
                 checkHealth(fallbackHealthUri), workers);
 
         try {
-            Boolean defaultHealthy = defaultCheck.get(3, TimeUnit.SECONDS);
-            Boolean fallbackHealthy = fallbackCheck.get(3, TimeUnit.SECONDS);
+            Boolean defaultHealthy = defaultCheck.get(300, TimeUnit.MILLISECONDS);
+            Boolean fallbackHealthy = fallbackCheck.get(300, TimeUnit.MILLISECONDS);
 
             ProcessorService selectedService;
             URI selectedUri;
