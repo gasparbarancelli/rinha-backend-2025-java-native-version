@@ -8,6 +8,7 @@ import com.gasparbarancelli.repository.PaymentRepository;
 import com.gasparbarancelli.transport.JsonUtils;
 import com.gasparbarancelli.transport.model.ServiceHealthRequest;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -115,6 +116,7 @@ public class PaymentService {
     }
 
     private boolean processPaymentToProcessor(Payment request) {
+        System.out.println("Processing payment: " + request);
         ProcessorState currentProcessor = getCachedHealthyProcessor();
 
         try {
@@ -132,12 +134,15 @@ public class PaymentService {
 
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
                 repository.savePayment(request, currentProcessor.service);
+                System.out.println("Payment " + request.correlationId() + " successfully processed by " + currentProcessor.service + ". Status: " + response.statusCode() + ". Details: " + request);
                 return true;
+            } else {
+                System.err.println("Payment " + request.correlationId() + " failed with status: " + response.statusCode() + " from " + currentProcessor.service + ". Details: " + request);
+                return false;
             }
 
-            return false;
-
         } catch (Exception e) {
+            System.err.println("Error processing payment " + request.correlationId() + " to " + currentProcessor.service + ": " + e.getMessage() + ". Details: " + request);
             return false;
         }
     }
@@ -255,6 +260,10 @@ public class PaymentService {
 
     public void purgeAllData() {
         repository.purgeAllData();
+    }
+
+    public void closeRepository() throws IOException {
+        repository.close();
     }
 
 }
