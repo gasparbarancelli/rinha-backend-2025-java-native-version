@@ -3,7 +3,6 @@ package com.gasparbarancelli.transport;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.PropertyAccessor;
 import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -17,13 +16,10 @@ import com.gasparbarancelli.transport.model.PaymentSummaryResponse;
 import com.gasparbarancelli.transport.model.ServiceHealthRequest;
 import com.gasparbarancelli.transport.model.ServiceHealthResponse;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.util.Arrays;
 
 public class JsonUtils {
 
@@ -33,14 +29,6 @@ public class JsonUtils {
     private static final ObjectReader PAYMENT_REQUEST_READER;
     private static final ObjectReader SERVICE_HEALTH_READER;
     private static final ObjectWriter DEFAULT_WRITER;
-    private static final ThreadLocal<byte[]> BUFFER_CACHE =
-            ThreadLocal.withInitial(() -> new byte[2048]);
-    private static final String PAYMENT_RESPONSE_TEMPLATE =
-            "{\"status\":\"success\",\"message\":\"Payment request accepted\",\"correlationId\":\"%s\"}";
-    private static final byte[] PAYMENT_RESPONSE_PREFIX =
-            "{\"status\":\"success\",\"message\":\"Payment request accepted\",\"correlationId\":\"".getBytes(StandardCharsets.UTF_8);
-    private static final byte[] PAYMENT_RESPONSE_SUFFIX =
-            "\"}".getBytes(StandardCharsets.UTF_8);
 
     static {
         JSON_FACTORY = new JsonFactory();
@@ -109,25 +97,6 @@ public class JsonUtils {
             return new ServiceHealthRequest(response.failing(), response.minResponseTime());
         } catch (IOException e) {
             throw new RuntimeException("Error parsing service health", e);
-        }
-    }
-
-    public static byte[] createPaymentAcceptedResponse(String correlationId) {
-        byte[] correlationBytes = correlationId.getBytes(StandardCharsets.UTF_8);
-        int totalSize = PAYMENT_RESPONSE_PREFIX.length + correlationBytes.length + PAYMENT_RESPONSE_SUFFIX.length;
-
-        byte[] buffer = BUFFER_CACHE.get();
-        if (totalSize <= buffer.length) {
-            int pos = 0;
-            System.arraycopy(PAYMENT_RESPONSE_PREFIX, 0, buffer, pos, PAYMENT_RESPONSE_PREFIX.length);
-            pos += PAYMENT_RESPONSE_PREFIX.length;
-            System.arraycopy(correlationBytes, 0, buffer, pos, correlationBytes.length);
-            pos += correlationBytes.length;
-            System.arraycopy(PAYMENT_RESPONSE_SUFFIX, 0, buffer, pos, PAYMENT_RESPONSE_SUFFIX.length);
-            return Arrays.copyOf(buffer, totalSize);
-        } else {
-            // Fallback para strings grandes
-            return String.format(PAYMENT_RESPONSE_TEMPLATE, correlationId).getBytes(StandardCharsets.UTF_8);
         }
     }
 

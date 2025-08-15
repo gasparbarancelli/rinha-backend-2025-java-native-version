@@ -43,6 +43,13 @@ public class HttpResponseHelper {
         sendResponse(exchange, statusCode, jsonBytes);
     }
 
+    public static void sendResponse(HttpExchange exchange, int statusCode) throws IOException {
+        try (exchange) {
+            exchange.getResponseHeaders().set(CONTENT_TYPE, APPLICATION_JSON);
+            exchange.sendResponseHeaders(statusCode, 0);
+        }
+    }
+
     public static void sendResponse(HttpExchange exchange, int statusCode, byte[] responseBytes) throws IOException {
         try (exchange) {
             exchange.getResponseHeaders().set(CONTENT_TYPE, APPLICATION_JSON);

@@ -1,12 +1,25 @@
-version: '3.8'
-
 services:
+
+  valkey:
+    image: valkey/valkey:7.2-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: "30MB"
+
   javinha-da-massa-1: &javinha
     image: gasparbarancelli/rinha-de-backend-2025:latest
     networks:
       - backend
       - payment-processor
     environment:
+      - VALKEY_HOST=valkey
+      - VALKEY_PORT=6379
       - PAYMENT_PROCESSOR_URL_DEFAULT=http://payment-processor-default:8080
       - PAYMENT_PROCESSOR_URL_FALLBACK=http://payment-processor-fallback:8080
       - HTTP_PORT=8080
@@ -14,7 +27,9 @@ services:
       resources:
         limits:
           cpus: "0.65"
-          memory: "125MB"
+          memory: "150MB"
+    depends_on:
+      - valkey
 
   javinha-da-massa-2:
     <<: *javinha
@@ -31,7 +46,7 @@ services:
       resources:
         limits:
           cpus: "0.2"
-          memory: "100MB"
+          memory: "20MB"
     depends_on:
       - javinha-da-massa-1
       - javinha-da-massa-2

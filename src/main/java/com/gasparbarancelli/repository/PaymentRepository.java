@@ -4,6 +4,7 @@ import com.gasparbarancelli.entity.Payment;
 import com.gasparbarancelli.entity.PaymentSummary;
 import com.gasparbarancelli.entity.ProcessorService;
 
+import java.io.IOException;
 import java.time.Instant;
 
 public interface PaymentRepository {
@@ -11,8 +12,6 @@ public interface PaymentRepository {
     void enqueuePayment(Payment request);
 
     Payment dequeuePayment(int workerId);
-
-    void requeuePayment(Payment request);
 
     void savePayment(Payment request, ProcessorService service);
 
@@ -28,4 +27,5 @@ public interface PaymentRepository {
 
     void purgeAllData();
 
+    void close() throws IOException;
 }

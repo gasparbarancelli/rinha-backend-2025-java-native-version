@@ -16,7 +16,6 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class PaymentService {
@@ -29,21 +28,15 @@ public class PaymentService {
     private final URI fallbackPaymentUri;
     private final URI defaultHealthUri;
     private final URI fallbackHealthUri;
-
-    // Cache de health status
     private volatile long lastHealthCheck = 0;
     private static final long HEALTH_CACHE_MS = 5000;
 
-    private static final int WORKER_COUNT = 20; // Aumentado para melhor throughput
-    private static final Duration CONNECT_TIMEOUT = Duration.ofMillis(100); // Reduzido de 500ms
-    private static final Duration REQUEST_TIMEOUT = Duration.ofMillis(500); // Reduzido de 5s
-    private static final Duration HEALTH_CHECK_TIMEOUT = Duration.ofMillis(200); // Reduzido de 2s
+    private static final int WORKER_COUNT = 20;
+    private static final Duration CONNECT_TIMEOUT = Duration.ofMillis(100);
+    private static final Duration REQUEST_TIMEOUT = Duration.ofMillis(500);
+    private static final Duration HEALTH_CHECK_TIMEOUT = Duration.ofMillis(200);
     private static final String CONTENT_TYPE_HEADER = "Content-Type";
     private static final String APPLICATION_JSON = "application/json";
-
-    // Métricas para debug
-    private final AtomicLong totalProcessed = new AtomicLong(0);
-    private final AtomicLong totalQueueTime = new AtomicLong(0);
 
     private record ProcessorState(ProcessorService service, URI uri) {
     }
@@ -53,11 +46,11 @@ public class PaymentService {
 
         String defaultBase = System.getenv().getOrDefault(
                 "PAYMENT_PROCESSOR_URL_DEFAULT",
-                "http://payment-processor-default:8080"
+                "http://localhost:8001"
         );
         String fallbackBase = System.getenv().getOrDefault(
                 "PAYMENT_PROCESSOR_URL_FALLBACK",
-                "http://payment-processor-fallback:8080"
+                "http://localhost:8002"
         );
 
         this.defaultPaymentUri = URI.create(defaultBase + "/payments");
@@ -70,7 +63,7 @@ public class PaymentService {
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(CONNECT_TIMEOUT)
                 .version(HttpClient.Version.HTTP_1_1)
-                .executor(ForkJoinPool.commonPool()) // Usar ForkJoinPool para melhor performance
+                .executor(ForkJoinPool.commonPool())
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
 
@@ -96,32 +89,19 @@ public class PaymentService {
     private void processPaymentsLoop(int workerId) {
         while (!Thread.currentThread().isInterrupted()) {
             try {
-                long startTime = System.nanoTime();
-                Payment request = repository.dequeuePayment(workerId); // Agora bloqueia até ter payment
-
+                Payment request = repository.dequeuePayment(workerId);
                 if (request != null) {
-                    long queueTime = System.nanoTime() - startTime;
-                    totalQueueTime.addAndGet(queueTime);
-
-                    if (!processPaymentToProcessor(request)) {
-                        repository.requeuePayment(request);
-                    } else {
-                        totalProcessed.incrementAndGet();
-                    }
+                    processPaymentToProcessor(request);
                 }
-            } catch (Exception e) {
-                // Log error but continue
+            } catch (Exception ignore) {
             }
         }
     }
 
-    private boolean processPaymentToProcessor(Payment request) {
-        System.out.println("Processing payment: " + request);
-        ProcessorState currentProcessor = getCachedHealthyProcessor();
-
+    private void processPaymentToProcessor(Payment request) {
         try {
+            ProcessorState currentProcessor = getCachedHealthyProcessor();
             String requestBody = JsonUtils.toJson(request);
-
             HttpRequest httpRequest = HttpRequest.newBuilder()
                     .uri(currentProcessor.uri)
                     .header(CONTENT_TYPE_HEADER, APPLICATION_JSON)
@@ -134,16 +114,8 @@ public class PaymentService {
 
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
                 repository.savePayment(request, currentProcessor.service);
-                System.out.println("Payment " + request.correlationId() + " successfully processed by " + currentProcessor.service + ". Status: " + response.statusCode() + ". Details: " + request);
-                return true;
-            } else {
-                System.err.println("Payment " + request.correlationId() + " failed with status: " + response.statusCode() + " from " + currentProcessor.service + ". Details: " + request);
-                return false;
             }
-
-        } catch (Exception e) {
-            System.err.println("Error processing payment " + request.correlationId() + " to " + currentProcessor.service + ": " + e.getMessage() + ". Details: " + request);
-            return false;
+        } catch (Exception ignore) {
         }
     }
 
@@ -152,7 +124,6 @@ public class PaymentService {
         if (now - lastHealthCheck < HEALTH_CACHE_MS) {
             return healthyProcessor.get();
         }
-        // Forçar atualização assíncrona se cache expirou
         scheduler.execute(this::performHealthCheck);
         return healthyProcessor.get();
     }
@@ -239,14 +210,10 @@ public class PaymentService {
         }
     }
 
-    public CompletableFuture<Boolean> processPayment(Payment request) {
-        return CompletableFuture.supplyAsync(() -> {
-            try {
+    public void processPayment(Payment request) {
+        CompletableFuture.supplyAsync(() -> {
                 repository.enqueuePayment(request);
                 return true;
-            } catch (Exception e) {
-                return false;
-            }
         }, workers);
     }
 

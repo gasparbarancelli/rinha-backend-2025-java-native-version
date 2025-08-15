@@ -1,0 +1,98 @@
+# Estágio 1: Build da Aplicação com SDKMAN
+FROM ubuntu:24.04 AS builder
+
+# Evita prompts interativos durante a instalação de pacotes
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Instala as dependências necessárias para SDKMAN e Maven
+# No estágio 'builder'
+RUN apt-get update && apt-get install -y \
+    curl \
+    zip \
+    unzip \
+    maven \
+    binutils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configura o ambiente do SDKMAN
+ENV SDKMAN_DIR="/root/.sdkman"
+ENV PATH="${SDKMAN_DIR}/bin:${PATH}"
+
+# Instala o SDKMAN
+RUN curl -s "https://get.sdkman.io" | bash
+
+# Define a versão exata do Java a ser instalada
+ARG JAVA_VERSION=25.ea.34-open
+
+# Instala, usa e define como padrão a versão do Java especificada
+RUN bash -c "source ${SDKMAN_DIR}/bin/sdkman-init.sh && \
+    sdk install java ${JAVA_VERSION} && \
+    sdk default java ${JAVA_VERSION}"
+
+# Define o JAVA_HOME para que o Maven e outras ferramentas o encontrem
+ENV JAVA_HOME="${SDKMAN_DIR}/candidates/java/current"
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+# Define o diretório de trabalho
+WORKDIR /app
+
+# Copia e baixa as dependências
+COPY pom.xml .
+RUN bash -c "source ${SDKMAN_DIR}/bin/sdkman-init.sh && mvn dependency:go-offline"
+
+# Copia o código-fonte e compila
+COPY src ./src
+RUN bash -c "source ${SDKMAN_DIR}/bin/sdkman-init.sh && mvn package -DskipTests"
+
+# ---
+
+# Estágio 2: Criação da JRE Mínima com jlink
+FROM builder AS jre-builder
+
+# Determina os módulos Java necessários para a aplicação
+# E os armazena em um arquivo para o jlink usar
+RUN $JAVA_HOME/bin/jdeps \
+    --ignore-missing-deps \
+    --print-module-deps \
+    --class-path 'target/dependency/*' \
+    target/*.jar > jre-deps.info
+
+# Cria a JRE customizada
+RUN $JAVA_HOME/bin/jlink \
+    --add-modules $(cat jre-deps.info) \
+    --strip-debug \
+    --no-header-files \
+    --no-man-pages \
+    --compress=2 \
+    --output /opt/java-runtime
+
+# ---
+
+# Estágio 3: Imagem final de execução, a partir de uma base mínima
+FROM debian:12-slim
+
+ENV LANG C.UTF-8
+ENV JAVA_HOME=/opt/java-runtime
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+WORKDIR /app
+
+# Copia a JRE customizada do estágio jre-builder
+COPY --from=jre-builder /opt/java-runtime $JAVA_HOME
+
+# Copia o JAR da aplicação do estágio builder
+COPY --from=builder /app/target/*.jar app.jar
+
+# Expõe a porta da aplicação
+EXPOSE 8080
+
+# Comando para rodar a aplicação com as flags JVM recomendadas
+# Note que a JRE customizada já tem as permissões,
+# mas mantemos as flags por segurança e boas práticas.
+ENTRYPOINT ["java", \
+            "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED", \
+            "--add-opens=java.base/java.lang=ALL-UNNAMED", \
+            "--enable-native-access=ALL-UNNAMED", \
+            "--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED", \
+            "-jar", \
+            "app.jar"]

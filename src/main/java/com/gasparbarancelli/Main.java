@@ -8,25 +8,20 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.Optional;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 public class Main {
     private static final String HTTP_PORT_ENV = "HTTP_PORT";
-    private static final int BACKLOG = 4096; // Aumentado para suportar mais conexões
+    private static final int BACKLOG = 4096;
 
     static {
-        // Otimizações para baixa latência
-        System.setProperty("sun.net.httpserver.maxReqTime", "100"); // Reduzido de 1000
-        System.setProperty("sun.net.httpserver.maxRspTime", "100"); // Reduzido de 1000
+        System.setProperty("sun.net.httpserver.maxReqTime", "100");
+        System.setProperty("sun.net.httpserver.maxRspTime", "100");
         System.setProperty("sun.net.httpserver.nodelay", "true");
         System.setProperty("sun.net.httpserver.maxConnections", "2000");
         System.setProperty("java.net.preferIPv4Stack", "true");
         System.setProperty("java.awt.headless", "true");
         System.setProperty("jdk.httpclient.connectionPoolSize", "100");
         System.setProperty("jdk.httpclient.keepalive.timeout", "10");
-
-        // Otimizações de JVM
         System.setProperty("jdk.virtualThreadScheduler.parallelism", "64");
         System.setProperty("jdk.virtualThreadScheduler.maxPoolSize", "256");
     }
@@ -48,11 +43,10 @@ public class Main {
         server.createContext("/payments-summary", paymentHandler::handlePaymentsSummary);
         server.createContext("/purge-payments", paymentHandler::handlePurgePayments);
 
-        // Usar ThreadPerTaskExecutor com virtual threads para máxima performance
         var executor = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory());
         server.setExecutor(executor);
 
-        System.out.println("Rinha Backend 2025 - Otimizado para p99 < 1ms");
+        System.out.println("Rinha Backend 2025");
         System.out.println("Porta: " + inetSocketAddress.get().getPort());
 
         server.start();
@@ -60,8 +54,17 @@ public class Main {
         long endTime = System.nanoTime();
         long startupTimeNanos = endTime - startTime;
         double startupTimeMillis = startupTimeNanos / 1_000_000.0;
+        System.out.println("Servidor HTTP iniciado com sucesso!");
         System.out.printf("Aplicação iniciada em %.3f ms (%.0f nanosegundos)%n",
                 startupTimeMillis, (double) startupTimeNanos);
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                paymentService.closeRepository();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }));
     }
 
     private static Optional<InetSocketAddress> getSocketAddress() {

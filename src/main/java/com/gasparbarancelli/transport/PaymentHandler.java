@@ -9,14 +9,12 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 
 public class PaymentHandler {
     private final PaymentService paymentService;
     private static final String POST = "POST";
     private static final String GET = "GET";
     private static final byte[] AMOUNT_ERROR = "Amount must be greater than zero".getBytes();
-    private static final byte[] PROCESS_ERROR = "Failed to process payment".getBytes();
 
     public PaymentHandler(PaymentService paymentService) {
         this.paymentService = paymentService;
@@ -37,11 +35,8 @@ public class PaymentHandler {
                 return;
             }
 
-            // Processar de forma assíncrona e retornar imediatamente
-            CompletableFuture<Boolean> future = paymentService.processPayment(payment);
-
-            // Responder imediatamente com 202 Accepted
-            sendPaymentAcceptedResponse(exchange, payment);
+            paymentService.processPayment(payment);
+            sendPaymentAcceptedResponse(exchange);
 
         } catch (IllegalArgumentException e) {
             HttpResponseHelper.sendInvalidRequest(exchange);
@@ -91,9 +86,7 @@ public class PaymentHandler {
         }
     }
 
-    private void sendPaymentAcceptedResponse(HttpExchange exchange, Payment payment) throws IOException {
-        String correlationId = payment.correlationId();
-        byte[] response = JsonUtils.createPaymentAcceptedResponse(correlationId);
-        HttpResponseHelper.sendJsonResponse(exchange, 202, response);
+    private void sendPaymentAcceptedResponse(HttpExchange exchange) throws IOException {
+        HttpResponseHelper.sendResponse(exchange, 200);
     }
 }

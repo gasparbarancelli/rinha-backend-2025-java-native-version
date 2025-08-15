@@ -1,5 +1,23 @@
 [
   {
+    "name": "com.gasparbarancelli.entity.Payment",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.gasparbarancelli.entity.PaymentSummary",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.gasparbarancelli.entity.ProcessorService",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  },
+  {
     "name": "com.gasparbarancelli.transport.model.PaymentRequestResponse",
     "allDeclaredConstructors": true,
     "allDeclaredFields": true,
